@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -15,10 +17,14 @@ import Animated, {
   FadeOut,
   LinearTransition,
 } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
+import mediumWeight from "expo-symbols/androidWeights/medium";
 
-import type { ThemeColor } from "@/constants/theme";
+import { AppFonts, type ThemeColor } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import {
   createTask,
@@ -47,6 +53,14 @@ const EMPTY_COPY = {
   },
 };
 
+const ICON_WEIGHT = { ios: "medium", android: mediumWeight } as const;
+
+// Android lays the screen out above the tab bar, so only iOS needs the bottom inset.
+const SAFE_AREA_EDGES =
+  Platform.OS === "ios"
+    ? (["top", "right", "bottom", "left"] as const)
+    : (["top", "right", "left"] as const);
+
 export default function HomeScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState("");
@@ -57,25 +71,46 @@ export default function HomeScreen() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [focusedField, setFocusedField] = useState<
+    "title" | "description" | null
+  >(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [selectedFilter, setSelectedFilter] = useState<
     "all" | "in_progress" | "completed"
   >("all");
 
   const filteredTasks = tasks.filter((task) => {
-    if (selectedFilter === "in_progress") {
-      return !task.is_completed;
+    // Filter by status
+    if (selectedFilter === "in_progress" && task.is_completed) {
+      return false;
     }
 
-    if (selectedFilter === "completed") {
-      return task.is_completed;
+    if (selectedFilter === "completed" && !task.is_completed) {
+      return false;
     }
 
-    return true;
+    // Filter by search query
+    const query = searchQuery.toLowerCase().trim();
+
+    const matchesTitle = task.title.toLowerCase().includes(query);
+
+    const matchesDescription = (task.description ?? "")
+      .toLowerCase()
+      .includes(query);
+
+    return matchesTitle || matchesDescription;
   });
+
+  const totalTasks = tasks.length;
+
+  const completedTasks = tasks.filter((task) => task.is_completed).length;
+
+  const inProgressTasks = totalTasks - completedTasks;
 
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
 
   const loadTasks = useCallback(async () => {
     try {
@@ -93,16 +128,22 @@ export default function HomeScreen() {
     void loadTasks();
   }, [loadTasks]);
 
-  const completedCount = tasks.filter((task) => task.is_completed).length;
   const progressPercent =
-    tasks.length === 0 ? 0 : Math.round((completedCount / tasks.length) * 100);
-  const filterCounts = {
-    all: tasks.length,
-    in_progress: tasks.length - completedCount,
-    completed: completedCount,
-  };
-  const emptyCopy =
-    tasks.length === 0 ? EMPTY_COPY.all : EMPTY_COPY[selectedFilter];
+    totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+  const stats = [
+    { label: "Total Tasks", value: totalTasks },
+    { label: "In Progress", value: inProgressTasks },
+    { label: "Completed", value: completedTasks },
+  ];
+  const trimmedQuery = searchQuery.trim();
+  const emptyCopy = trimmedQuery
+    ? {
+        title: "No matching tasks",
+        text: `Nothing matches "${trimmedQuery}".`,
+      }
+    : totalTasks === 0
+      ? EMPTY_COPY.all
+      : EMPTY_COPY[selectedFilter];
   const today = new Date().toLocaleDateString(undefined, {
     weekday: "long",
     month: "long",
@@ -178,6 +219,16 @@ export default function HomeScreen() {
     setEditDescription(task.description ?? "");
   }
 
+  function cancelEditing() {
+    if (isSaving) {
+      return;
+    }
+
+    setEditingTaskId(null);
+    setEditTitle("");
+    setEditDescription("");
+  }
+
   async function saveEditedTask() {
     const title = editTitle.trim();
 
@@ -242,7 +293,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={SAFE_AREA_EDGES}>
       <View style={styles.header}>
         <Text style={styles.date}>{today}</Text>
         <Text style={styles.heading} accessibilityRole="header">
@@ -253,12 +304,7 @@ export default function HomeScreen() {
 
       <View style={styles.summary}>
         <View style={styles.summaryRow}>
-          <View>
-            <Text style={styles.summaryLabel}>Your progress</Text>
-            <Text style={styles.summaryNumber}>
-              {completedCount} of {tasks.length} completed
-            </Text>
-          </View>
+          <Text style={styles.summaryLabel}>Your progress</Text>
           <Text style={styles.summaryPercent}>{progressPercent}%</Text>
         </View>
 
@@ -272,6 +318,15 @@ export default function HomeScreen() {
             style={[styles.progressFill, { width: `${progressPercent}%` }]}
           />
         </View>
+
+        <View style={styles.statsRow}>
+          {stats.map((stat) => (
+            <View key={stat.label} style={styles.statTile}>
+              <Text style={styles.statNumber}>{stat.value}</Text>
+              <Text style={styles.statLabel}>{stat.label}</Text>
+            </View>
+          ))}
+        </View>
       </View>
 
       <View style={styles.composer}>
@@ -279,6 +334,8 @@ export default function HomeScreen() {
           style={styles.composerInput}
           placeholder="What needs to be done?"
           placeholderTextColor={colors.faint}
+          cursorColor={colors.accent}
+          selectionHandleColor={colors.accent}
           value={newTask}
           onChangeText={setNewTask}
           onSubmitEditing={addTask}
@@ -293,7 +350,7 @@ export default function HomeScreen() {
           ]}
           onPress={addTask}
           disabled={isCreating}
-          hitSlop={2}
+          hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel="Add task"
         >
@@ -302,11 +359,55 @@ export default function HomeScreen() {
           ) : (
             <SymbolView
               name={{ ios: "plus", android: "add", web: "add" }}
-              size={22}
+              size={16}
+              weight={ICON_WEIGHT}
               tintColor={colors.onAccent}
             />
           )}
         </Pressable>
+      </View>
+
+      <View style={styles.search}>
+        <SymbolView
+          name={{ ios: "magnifyingglass", android: "search", web: "search" }}
+          size={16}
+          weight={ICON_WEIGHT}
+          tintColor={colors.muted}
+        />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search tasks..."
+          placeholderTextColor={colors.faint}
+          cursorColor={colors.accent}
+          selectionHandleColor={colors.accent}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+          accessibilityLabel="Search tasks"
+        />
+        {searchQuery ? (
+          <Pressable
+            onPress={() => setSearchQuery("")}
+            style={({ pressed }) => [
+              styles.clearButton,
+              pressed && styles.pressed,
+            ]}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+          >
+            <SymbolView
+              name={{
+                ios: "xmark.circle.fill",
+                android: "close",
+                web: "close",
+              }}
+              size={18}
+              weight={ICON_WEIGHT}
+              tintColor={colors.muted}
+            />
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.segmented} accessibilityRole="tablist">
@@ -325,7 +426,6 @@ export default function HomeScreen() {
               hitSlop={{ top: 4, bottom: 4 }}
               accessibilityRole="tab"
               accessibilityState={{ selected: isActive }}
-              accessibilityLabel={`${label}, ${filterCounts[key]} tasks`}
             >
               <Text
                 style={[
@@ -333,8 +433,7 @@ export default function HomeScreen() {
                   isActive && styles.segmentTextActive,
                 ]}
               >
-                {label}{" "}
-                <Text style={styles.segmentCount}>{filterCounts[key]}</Text>
+                {label}
               </Text>
             </Pressable>
           );
@@ -342,13 +441,24 @@ export default function HomeScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.list} accessible accessibilityLabel="Loading tasks">
+        <View
+          style={styles.listCard}
+          accessible
+          accessibilityLabel="Loading tasks"
+        >
           {[0, 1, 2].map((index) => (
-            <View key={index} style={styles.skeletonCard}>
-              <View style={styles.skeletonCircle} />
-              <View style={styles.skeletonLines}>
-                <View style={[styles.skeletonLine, styles.skeletonLineLong]} />
-                <View style={[styles.skeletonLine, styles.skeletonLineShort]} />
+            <View key={index}>
+              {index > 0 && <View style={styles.separator} />}
+              <View style={styles.skeletonRow}>
+                <View style={styles.skeletonCircle} />
+                <View style={styles.skeletonLines}>
+                  <View
+                    style={[styles.skeletonLine, styles.skeletonLineLong]}
+                  />
+                  <View
+                    style={[styles.skeletonLine, styles.skeletonLineShort]}
+                  />
+                </View>
               </View>
             </View>
           ))}
@@ -362,7 +472,8 @@ export default function HomeScreen() {
                 android: "cloud_off",
                 web: "cloud_off",
               }}
-              size={28}
+              size={26}
+              weight={ICON_WEIGHT}
               tintColor={colors.danger}
             />
           </View>
@@ -385,22 +496,32 @@ export default function HomeScreen() {
         <Animated.FlatList
           data={filteredTasks}
           keyExtractor={(item) => item.id.toString()}
-          // Without this, the first tap on Save/Cancel only closes the keyboard.
+          // Let rows react to the first tap while the search keyboard is open.
           keyboardShouldPersistTaps="handled"
           itemLayoutAnimation={LinearTransition.duration(200)}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={
-            filteredTasks.length === 0 ? styles.emptyList : styles.list
+            filteredTasks.length === 0 ? styles.emptyList : styles.listCard
           }
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <View style={styles.stateIcon}>
                 <SymbolView
-                  name={{
-                    ios: "checklist",
-                    android: "task_alt",
-                    web: "task_alt",
-                  }}
-                  size={28}
+                  name={
+                    trimmedQuery
+                      ? {
+                          ios: "magnifyingglass",
+                          android: "search",
+                          web: "search",
+                        }
+                      : {
+                          ios: "checklist",
+                          android: "task_alt",
+                          web: "task_alt",
+                        }
+                  }
+                  size={26}
+                  weight={ICON_WEIGHT}
                   tintColor={colors.accent}
                 />
               </View>
@@ -412,7 +533,7 @@ export default function HomeScreen() {
             <Animated.View
               entering={FadeIn.duration(200)}
               exiting={FadeOut.duration(150)}
-              style={styles.taskCard}
+              style={styles.taskRow}
             >
               <Pressable
                 style={[
@@ -420,7 +541,7 @@ export default function HomeScreen() {
                   item.is_completed && styles.checkboxCompleted,
                 ]}
                 onPress={() => toggleTask(item.id)}
-                hitSlop={11}
+                hitSlop={12}
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: item.is_completed }}
                 accessibilityLabel={`Toggle ${item.title}`}
@@ -429,139 +550,177 @@ export default function HomeScreen() {
                   <SymbolView
                     name={{ ios: "checkmark", android: "check", web: "check" }}
                     size={16}
+                    weight={ICON_WEIGHT}
                     tintColor={colors.onAccent}
                   />
                 )}
               </Pressable>
 
-              {editingTaskId === item.id ? (
-                <View style={styles.editForm}>
-                  <TextInput
-                    style={styles.editInput}
-                    value={editTitle}
-                    onChangeText={setEditTitle}
-                    placeholder="Task title"
-                    placeholderTextColor={colors.faint}
-                    maxLength={200}
-                    accessibilityLabel="Task title"
-                  />
-
-                  <TextInput
-                    style={[styles.editInput, styles.descriptionInput]}
-                    value={editDescription}
-                    onChangeText={setEditDescription}
-                    placeholder="Description (optional)"
-                    placeholderTextColor={colors.faint}
-                    multiline
-                    accessibilityLabel="Task description"
-                  />
-
-                  <View style={styles.editActions}>
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.secondaryButton,
-                        pressed && styles.pressed,
-                      ]}
-                      onPress={() => {
-                        setEditingTaskId(null);
-                        setEditTitle("");
-                        setEditDescription("");
-                      }}
-                      disabled={isSaving}
-                      hitSlop={4}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.secondaryButtonText}>Cancel</Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.primaryButton,
-                        (pressed || isSaving) && styles.pressed,
-                      ]}
-                      onPress={saveEditedTask}
-                      disabled={isSaving}
-                      hitSlop={4}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.primaryButtonText}>
-                        {isSaving ? "Saving..." : "Save"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : (
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.taskContent,
-                    pressed && styles.pressed,
+              <Pressable
+                style={({ pressed }) => [
+                  styles.taskContent,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => toggleTask(item.id)}
+              >
+                <Text
+                  style={[
+                    styles.taskTitle,
+                    item.is_completed && styles.completedTitle,
                   ]}
-                  onPress={() => toggleTask(item.id)}
                 >
-                  <Text
-                    style={[
-                      styles.taskTitle,
-                      item.is_completed && styles.completedTitle,
-                    ]}
-                  >
-                    {item.title}
+                  {item.title}
+                </Text>
+
+                {item.description ? (
+                  <Text style={styles.taskDescription}>
+                    {item.description}
                   </Text>
+                ) : null}
+              </Pressable>
 
-                  {item.description ? (
-                    <Text style={styles.taskDescription}>
-                      {item.description}
-                    </Text>
-                  ) : null}
+              <View style={styles.taskActions}>
+                <Pressable
+                  onPress={() => startEditingTask(item)}
+                  style={({ pressed }) => [
+                    styles.iconButton,
+                    pressed && styles.iconButtonPressed,
+                  ]}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Edit ${item.title}`}
+                >
+                  <SymbolView
+                    name={{ ios: "pencil", android: "edit", web: "edit" }}
+                    size={20}
+                    weight={ICON_WEIGHT}
+                    tintColor={colors.muted}
+                  />
                 </Pressable>
-              )}
 
-              {editingTaskId !== item.id && (
-                <View style={styles.taskActions}>
-                  <Pressable
-                    onPress={() => startEditingTask(item)}
-                    style={({ pressed }) => [
-                      styles.iconButton,
-                      pressed && styles.iconButtonPressed,
-                    ]}
-                    hitSlop={4}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Edit ${item.title}`}
-                  >
-                    <SymbolView
-                      name={{ ios: "pencil", android: "edit", web: "edit" }}
-                      size={20}
-                      tintColor={colors.muted}
-                    />
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => handleDeleteTask(item.id)}
-                    style={({ pressed }) => [
-                      styles.iconButton,
-                      pressed && styles.iconButtonPressed,
-                    ]}
-                    hitSlop={4}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Delete ${item.title}`}
-                  >
+                <Pressable
+                  onPress={() => handleDeleteTask(item.id)}
+                  style={({ pressed }) => [
+                    styles.iconButton,
+                    pressed && styles.iconButtonDangerPressed,
+                  ]}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete ${item.title}`}
+                >
+                  {({ pressed }) => (
                     <SymbolView
                       name={{ ios: "trash", android: "delete", web: "delete" }}
                       size={20}
-                      tintColor={colors.danger}
+                      weight={ICON_WEIGHT}
+                      tintColor={pressed ? colors.danger : colors.muted}
                     />
-                  </Pressable>
-                </View>
-              )}
+                  )}
+                </Pressable>
+              </View>
             </Animated.View>
           )}
         />
       )}
 
       <Text style={styles.footer}>Small steps. Big progress.</Text>
+
+      <Modal
+        visible={editingTaskId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelEditing}
+      >
+        <KeyboardAvoidingView behavior="padding" style={styles.sheetOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={cancelEditing}
+            accessibilityRole="button"
+            accessibilityLabel="Close editor"
+          />
+
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle} accessibilityRole="header">
+              Edit task
+            </Text>
+
+            <Text style={styles.fieldLabel}>Title</Text>
+            <TextInput
+              style={[
+                styles.sheetInput,
+                focusedField === "title" && styles.sheetInputFocused,
+              ]}
+              value={editTitle}
+              onChangeText={setEditTitle}
+              onFocus={() => setFocusedField("title")}
+              onBlur={() => setFocusedField(null)}
+              placeholder="Task title"
+              placeholderTextColor={colors.faint}
+              cursorColor={colors.accent}
+              selectionHandleColor={colors.accent}
+              maxLength={200}
+              autoFocus
+              accessibilityLabel="Task title"
+            />
+
+            <Text style={styles.fieldLabel}>Description</Text>
+            <TextInput
+              style={[
+                styles.sheetInput,
+                styles.sheetDescription,
+                focusedField === "description" && styles.sheetInputFocused,
+              ]}
+              value={editDescription}
+              onChangeText={setEditDescription}
+              onFocus={() => setFocusedField("description")}
+              onBlur={() => setFocusedField(null)}
+              placeholder="Add details (optional)"
+              placeholderTextColor={colors.faint}
+              cursorColor={colors.accent}
+              selectionHandleColor={colors.accent}
+              multiline
+              accessibilityLabel="Task description"
+            />
+
+            <View style={styles.sheetActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  styles.sheetButton,
+                  pressed && styles.pressed,
+                ]}
+                onPress={cancelEditing}
+                disabled={isSaving}
+                accessibilityRole="button"
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.sheetButton,
+                  (pressed || isSaving) && styles.pressed,
+                ]}
+                onPress={saveEditedTask}
+                disabled={isSaving}
+                accessibilityRole="button"
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isSaving ? "Saving..." : "Save"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+// Google Sans has very tall line metrics: on Android, includeFontPadding: false plus an
+// explicit lineHeight keeps text gaps and the input cursor compact.
 function createStyles(colors: Record<ThemeColor, string>) {
   return StyleSheet.create({
     container: {
@@ -570,130 +729,203 @@ function createStyles(colors: Record<ThemeColor, string>) {
       maxWidth: 720,
       alignSelf: "center",
       backgroundColor: colors.screen,
-      paddingHorizontal: 20,
+      paddingHorizontal: 16,
     },
-    header: { paddingTop: 16, paddingBottom: 20 },
+    header: { paddingTop: 8, paddingBottom: 12, gap: 2 },
     date: {
       color: colors.accentStrong,
-      fontSize: 14,
-      fontWeight: "700",
-      marginBottom: 4,
+      fontFamily: AppFonts.medium,
+      fontSize: 12,
+      lineHeight: 16,
+      includeFontPadding: false,
     },
     heading: {
       color: colors.heading,
-      fontSize: 34,
-      fontWeight: "800",
-      letterSpacing: -1,
+      fontFamily: AppFonts.bold,
+      fontSize: 24,
+      lineHeight: 30,
+      letterSpacing: -0.5,
+      includeFontPadding: false,
     },
-    subtitle: { color: colors.muted, fontSize: 15, marginTop: 4 },
+    subtitle: {
+      color: colors.muted,
+      fontFamily: AppFonts.regular,
+      fontSize: 14,
+      lineHeight: 20,
+      includeFontPadding: false,
+    },
     summary: {
       backgroundColor: colors.hero,
-      borderRadius: 24,
-      padding: 20,
-      gap: 16,
-      marginBottom: 16,
+      borderRadius: 18,
+      padding: 14,
+      gap: 10,
+      marginBottom: 10,
     },
     summaryRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
     },
-    summaryLabel: { color: colors.heroMuted, fontSize: 13, fontWeight: "600" },
-    summaryNumber: {
-      color: colors.onAccent,
-      fontSize: 20,
-      fontWeight: "700",
-      marginTop: 4,
+    summaryLabel: {
+      color: colors.heroMuted,
+      fontFamily: AppFonts.medium,
+      fontSize: 12,
+      lineHeight: 16,
+      includeFontPadding: false,
     },
     summaryPercent: {
       color: colors.onAccent,
-      fontSize: 34,
-      fontWeight: "800",
-      letterSpacing: -1,
+      fontFamily: AppFonts.bold,
+      fontSize: 18,
+      lineHeight: 22,
+      includeFontPadding: false,
     },
     progressTrack: {
-      height: 10,
-      borderRadius: 5,
+      height: 4,
+      borderRadius: 2,
       backgroundColor: colors.heroTrack,
       overflow: "hidden",
     },
     progressFill: {
       height: "100%",
-      borderRadius: 5,
+      borderRadius: 2,
       backgroundColor: colors.heroMuted,
+    },
+    statsRow: { flexDirection: "row", gap: 8 },
+    statTile: {
+      flex: 1,
+      gap: 2,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: 12,
+      backgroundColor: colors.heroSurface,
+    },
+    statNumber: {
+      color: colors.onAccent,
+      fontFamily: AppFonts.bold,
+      fontSize: 16,
+      lineHeight: 20,
+      includeFontPadding: false,
+    },
+    statLabel: {
+      color: colors.heroMuted,
+      fontFamily: AppFonts.regular,
+      fontSize: 12,
+      lineHeight: 16,
+      includeFontPadding: false,
     },
     composer: {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
       backgroundColor: colors.card,
-      borderRadius: 18,
+      borderRadius: 14,
       borderWidth: 1,
       borderColor: colors.border,
-      paddingLeft: 16,
-      paddingRight: 6,
+      paddingLeft: 12,
+      paddingRight: 4,
       paddingVertical: 6,
-      marginBottom: 20,
+      marginBottom: 8,
     },
     composerInput: {
       flex: 1,
       minWidth: 0,
-      fontSize: 16,
       color: colors.heading,
-      paddingVertical: 10,
+      fontFamily: AppFonts.regular,
+      fontSize: 15,
+      lineHeight: 20,
+      includeFontPadding: false,
+      paddingVertical: 6,
     },
     addButton: {
-      width: 44,
-      height: 44,
-      borderRadius: 14,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
       backgroundColor: colors.accent,
       alignItems: "center",
       justifyContent: "center",
     },
     pressed: { opacity: 0.7 },
+    search: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      minHeight: 44,
+      paddingLeft: 12,
+      paddingRight: 6,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceMuted,
+      marginBottom: 8,
+    },
+    searchInput: {
+      flex: 1,
+      minWidth: 0,
+      color: colors.heading,
+      fontFamily: AppFonts.regular,
+      fontSize: 14,
+      lineHeight: 20,
+      includeFontPadding: false,
+      paddingVertical: 8,
+    },
+    clearButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: "center",
+      justifyContent: "center",
+    },
     segmented: {
       flexDirection: "row",
       gap: 4,
       padding: 4,
-      borderRadius: 14,
+      borderRadius: 12,
       backgroundColor: colors.surfaceMuted,
-      marginBottom: 16,
+      marginBottom: 10,
     },
     segment: {
       flex: 1,
       minHeight: 40,
       paddingHorizontal: 6,
-      borderRadius: 10,
+      borderRadius: 9,
       alignItems: "center",
       justifyContent: "center",
     },
     segmentActive: { backgroundColor: colors.accent },
     segmentText: {
       color: colors.muted,
+      fontFamily: AppFonts.medium,
       fontSize: 14,
-      fontWeight: "700",
+      lineHeight: 18,
+      includeFontPadding: false,
       textAlign: "center",
     },
     segmentTextActive: { color: colors.onAccent },
-    segmentCount: { fontWeight: "500" },
-    list: { gap: 10, paddingBottom: 16 },
-    emptyList: { flexGrow: 1, justifyContent: "center", paddingBottom: 30 },
-    taskCard: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 14,
+    listCard: {
       backgroundColor: colors.card,
-      borderRadius: 18,
+      borderRadius: 16,
       borderWidth: 1,
       borderColor: colors.border,
-      paddingVertical: 12,
-      paddingLeft: 16,
-      paddingRight: 8,
+      overflow: "hidden",
+    },
+    emptyList: { flexGrow: 1, justifyContent: "center", paddingBottom: 24 },
+    separator: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+      marginLeft: 50,
+    },
+    taskRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      minHeight: 56,
+      paddingVertical: 8,
+      paddingLeft: 14,
+      paddingRight: 4,
     },
     checkbox: {
-      width: 26,
-      height: 26,
-      borderRadius: 13,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
       borderWidth: 2,
       borderColor: colors.faint,
       alignItems: "center",
@@ -703,13 +935,25 @@ function createStyles(colors: Record<ThemeColor, string>) {
       backgroundColor: colors.accent,
       borderColor: colors.accent,
     },
-    taskContent: { flex: 1, gap: 2, minWidth: 0 },
-    taskTitle: { color: colors.heading, fontSize: 16, fontWeight: "600" },
+    taskContent: { flex: 1, minWidth: 0, gap: 1 },
+    taskTitle: {
+      color: colors.heading,
+      fontFamily: AppFonts.medium,
+      fontSize: 15,
+      lineHeight: 20,
+      includeFontPadding: false,
+    },
     completedTitle: {
       color: colors.muted,
       textDecorationLine: "line-through",
     },
-    taskDescription: { color: colors.muted, fontSize: 14, lineHeight: 20 },
+    taskDescription: {
+      color: colors.muted,
+      fontFamily: AppFonts.regular,
+      fontSize: 13,
+      lineHeight: 18,
+      includeFontPadding: false,
+    },
     taskActions: { flexDirection: "row", gap: 8 },
     iconButton: {
       width: 40,
@@ -719,27 +963,64 @@ function createStyles(colors: Record<ThemeColor, string>) {
       justifyContent: "center",
     },
     iconButtonPressed: { backgroundColor: colors.surfaceMuted },
-    editForm: { flex: 1, gap: 8 },
-    editInput: {
-      backgroundColor: colors.surfaceMuted,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      fontSize: 15,
-      color: colors.heading,
-    },
-    descriptionInput: { minHeight: 72, textAlignVertical: "top" },
-    editActions: {
-      flexDirection: "row",
+    iconButtonDangerPressed: { backgroundColor: colors.dangerSoft },
+    sheetOverlay: {
+      flex: 1,
       justifyContent: "flex-end",
-      gap: 8,
+      backgroundColor: colors.scrim,
+    },
+    sheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: 20,
+      paddingTop: 10,
+      gap: 6,
+    },
+    sheetHandle: {
+      alignSelf: "center",
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.border,
+      marginBottom: 8,
+    },
+    sheetTitle: {
+      color: colors.heading,
+      fontFamily: AppFonts.bold,
+      fontSize: 18,
+      lineHeight: 24,
+      includeFontPadding: false,
+      marginBottom: 6,
+    },
+    fieldLabel: {
+      color: colors.muted,
+      fontFamily: AppFonts.medium,
+      fontSize: 12,
+      lineHeight: 16,
+      includeFontPadding: false,
       marginTop: 4,
     },
+    sheetInput: {
+      backgroundColor: colors.surfaceMuted,
+      borderWidth: 1.5,
+      borderColor: colors.surfaceMuted,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: colors.heading,
+      fontFamily: AppFonts.regular,
+      fontSize: 15,
+      lineHeight: 20,
+      includeFontPadding: false,
+    },
+    sheetInputFocused: { borderColor: colors.accent },
+    sheetDescription: { minHeight: 96, textAlignVertical: "top" },
+    sheetActions: { flexDirection: "row", gap: 10, marginTop: 12 },
+    sheetButton: { flex: 1, minHeight: 48 },
     primaryButton: {
       minHeight: 40,
-      paddingHorizontal: 18,
+      paddingHorizontal: 16,
       borderRadius: 999,
       backgroundColor: colors.accent,
       alignItems: "center",
@@ -747,12 +1028,14 @@ function createStyles(colors: Record<ThemeColor, string>) {
     },
     primaryButtonText: {
       color: colors.onAccent,
+      fontFamily: AppFonts.medium,
       fontSize: 14,
-      fontWeight: "700",
+      lineHeight: 18,
+      includeFontPadding: false,
     },
     secondaryButton: {
       minHeight: 40,
-      paddingHorizontal: 18,
+      paddingHorizontal: 16,
       borderRadius: 999,
       backgroundColor: colors.surfaceMuted,
       alignItems: "center",
@@ -760,64 +1043,74 @@ function createStyles(colors: Record<ThemeColor, string>) {
     },
     secondaryButtonText: {
       color: colors.heading,
+      fontFamily: AppFonts.medium,
       fontSize: 14,
-      fontWeight: "700",
+      lineHeight: 18,
+      includeFontPadding: false,
     },
-    skeletonCard: {
+    skeletonRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 14,
-      backgroundColor: colors.card,
-      borderRadius: 18,
-      borderWidth: 1,
-      borderColor: colors.border,
-      padding: 16,
+      gap: 12,
+      minHeight: 56,
+      paddingHorizontal: 14,
     },
     skeletonCircle: {
-      width: 26,
-      height: 26,
-      borderRadius: 13,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
       backgroundColor: colors.surfaceMuted,
     },
-    skeletonLines: { flex: 1, gap: 8 },
+    skeletonLines: { flex: 1, gap: 6 },
     skeletonLine: {
-      height: 12,
-      borderRadius: 6,
+      height: 10,
+      borderRadius: 5,
       backgroundColor: colors.surfaceMuted,
     },
-    skeletonLineLong: { width: "70%" },
-    skeletonLineShort: { width: "45%" },
-    emptyState: { alignItems: "center", padding: 30, gap: 8 },
+    skeletonLineLong: { width: "65%" },
+    skeletonLineShort: { width: "40%" },
+    emptyState: { alignItems: "center", padding: 24, gap: 6 },
     stateIcon: {
-      width: 64,
-      height: 64,
-      borderRadius: 32,
+      width: 56,
+      height: 56,
+      borderRadius: 28,
       backgroundColor: colors.accentSoft,
       alignItems: "center",
       justifyContent: "center",
-      marginBottom: 8,
+      marginBottom: 6,
     },
     stateIconDanger: { backgroundColor: colors.dangerSoft },
     emptyTitle: {
       color: colors.heading,
-      fontSize: 19,
-      fontWeight: "800",
+      fontFamily: AppFonts.bold,
+      fontSize: 17,
+      lineHeight: 22,
+      includeFontPadding: false,
       textAlign: "center",
     },
-    emptyText: { color: colors.muted, fontSize: 14, textAlign: "center" },
+    emptyText: {
+      color: colors.muted,
+      fontFamily: AppFonts.regular,
+      fontSize: 14,
+      lineHeight: 20,
+      includeFontPadding: false,
+      textAlign: "center",
+    },
     centerState: {
       flex: 1,
       alignItems: "center",
       justifyContent: "center",
-      gap: 8,
+      gap: 6,
     },
     retryButton: { marginTop: 8 },
     footer: {
       textAlign: "center",
       color: colors.muted,
+      fontFamily: AppFonts.medium,
       fontSize: 12,
-      fontWeight: "600",
-      paddingVertical: 12,
+      lineHeight: 16,
+      includeFontPadding: false,
+      paddingVertical: 8,
     },
   });
 }

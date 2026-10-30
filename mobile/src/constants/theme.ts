@@ -27,7 +27,9 @@ export const Colors = {
     hero: '#292E63',
     heroMuted: '#BFC4FF',
     heroTrack: 'rgba(255, 255, 255, 0.18)',
+    heroSurface: 'rgba(255, 255, 255, 0.08)',
     surfaceMuted: '#ECEEF4',
+    scrim: 'rgba(15, 18, 38, 0.45)',
     danger: '#DC2626',
     dangerSoft: '#FEE2E2',
   },
@@ -50,7 +52,9 @@ export const Colors = {
     hero: '#23275A',
     heroMuted: '#BFC4FF',
     heroTrack: 'rgba(255, 255, 255, 0.18)',
+    heroSurface: 'rgba(255, 255, 255, 0.08)',
     surfaceMuted: '#20232F',
+    scrim: 'rgba(0, 0, 0, 0.6)',
     danger: '#F87171',
     dangerSoft: '#3A1518',
   },
@@ -82,6 +86,12 @@ export const Fonts = Platform.select({
     mono: 'var(--font-mono)',
   },
 });
+
+export const AppFonts = {
+  regular: 'GoogleSans_400Regular',
+  medium: 'GoogleSans_500Medium',
+  bold: 'GoogleSans_700Bold',
+} as const;
 
 export const Spacing = {
   half: 2,
