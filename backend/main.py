@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,15 @@ app = FastAPI(
     title="Task Manager API",
     description="Backend API for our Task Manager mobile app",
     version="1.0.0",
+)
+
+# The web build (Expo web / VS Code preview) calls the API from another port, so the browser needs CORS.
+# shortcut: allows any localhost/LAN dev origin; list the real web origin(s) before deploying.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?",
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
