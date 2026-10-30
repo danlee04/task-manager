@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Keyboard,
   Platform,
   Pressable,
@@ -11,6 +10,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+} from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
@@ -25,6 +29,24 @@ import {
   type Task,
 } from "@/services/tasks";
 
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "in_progress", label: "In Progress" },
+  { key: "completed", label: "Completed" },
+] as const;
+
+const EMPTY_COPY = {
+  all: { title: "All clear!", text: "Add a task above to get started." },
+  in_progress: {
+    title: "Nothing in progress",
+    text: "Every task is done. Nice work!",
+  },
+  completed: {
+    title: "No completed tasks yet",
+    text: "Tap the circle next to a task to complete it.",
+  },
+};
+
 export default function HomeScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState("");
@@ -35,6 +57,22 @@ export default function HomeScreen() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  const [selectedFilter, setSelectedFilter] = useState<
+    "all" | "in_progress" | "completed"
+  >("all");
+
+  const filteredTasks = tasks.filter((task) => {
+    if (selectedFilter === "in_progress") {
+      return !task.is_completed;
+    }
+
+    if (selectedFilter === "completed") {
+      return task.is_completed;
+    }
+
+    return true;
+  });
 
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -58,6 +96,18 @@ export default function HomeScreen() {
   const completedCount = tasks.filter((task) => task.is_completed).length;
   const progressPercent =
     tasks.length === 0 ? 0 : Math.round((completedCount / tasks.length) * 100);
+  const filterCounts = {
+    all: tasks.length,
+    in_progress: tasks.length - completedCount,
+    completed: completedCount,
+  };
+  const emptyCopy =
+    tasks.length === 0 ? EMPTY_COPY.all : EMPTY_COPY[selectedFilter];
+  const today = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
 
   function showMessage(title: string, message: string) {
     if (Platform.OS === "web") {
@@ -194,15 +244,17 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.eyebrow}>YOUR PERSONAL WORKSPACE</Text>
-        <Text style={styles.heading}>My Tasks</Text>
+        <Text style={styles.date}>{today}</Text>
+        <Text style={styles.heading} accessibilityRole="header">
+          My Tasks
+        </Text>
         <Text style={styles.subtitle}>Stay focused. Get things done.</Text>
       </View>
 
       <View style={styles.summary}>
         <View style={styles.summaryRow}>
           <View>
-            <Text style={styles.summaryLabel}>YOUR PROGRESS</Text>
+            <Text style={styles.summaryLabel}>Your progress</Text>
             <Text style={styles.summaryNumber}>
               {completedCount} of {tasks.length} completed
             </Text>
@@ -222,9 +274,9 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <View style={styles.inputRow}>
+      <View style={styles.composer}>
         <TextInput
-          style={styles.input}
+          style={styles.composerInput}
           placeholder="What needs to be done?"
           placeholderTextColor={colors.faint}
           value={newTask}
@@ -241,6 +293,7 @@ export default function HomeScreen() {
           ]}
           onPress={addTask}
           disabled={isCreating}
+          hitSlop={2}
           accessibilityRole="button"
           accessibilityLabel="Add task"
         >
@@ -249,19 +302,56 @@ export default function HomeScreen() {
           ) : (
             <SymbolView
               name={{ ios: "plus", android: "add", web: "add" }}
-              size={24}
+              size={22}
               tintColor={colors.onAccent}
             />
           )}
         </Pressable>
       </View>
 
-      <Text style={styles.sectionTitle}>TASK LIST</Text>
+      <View style={styles.segmented} accessibilityRole="tablist">
+        {FILTERS.map(({ key, label }) => {
+          const isActive = selectedFilter === key;
+
+          return (
+            <Pressable
+              key={key}
+              style={({ pressed }) => [
+                styles.segment,
+                isActive && styles.segmentActive,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => setSelectedFilter(key)}
+              hitSlop={{ top: 4, bottom: 4 }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={`${label}, ${filterCounts[key]} tasks`}
+            >
+              <Text
+                style={[
+                  styles.segmentText,
+                  isActive && styles.segmentTextActive,
+                ]}
+              >
+                {label}{" "}
+                <Text style={styles.segmentCount}>{filterCounts[key]}</Text>
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       {loading ? (
-        <View style={styles.centerState}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={styles.emptyText}>Loading tasks...</Text>
+        <View style={styles.list} accessible accessibilityLabel="Loading tasks">
+          {[0, 1, 2].map((index) => (
+            <View key={index} style={styles.skeletonCard}>
+              <View style={styles.skeletonCircle} />
+              <View style={styles.skeletonLines}>
+                <View style={[styles.skeletonLine, styles.skeletonLineLong]} />
+                <View style={[styles.skeletonLine, styles.skeletonLineShort]} />
+              </View>
+            </View>
+          ))}
         </View>
       ) : error ? (
         <View style={styles.centerState}>
@@ -285,19 +375,21 @@ export default function HomeScreen() {
               pressed && styles.pressed,
             ]}
             onPress={loadTasks}
+            hitSlop={4}
             accessibilityRole="button"
           >
             <Text style={styles.primaryButtonText}>Try again</Text>
           </Pressable>
         </View>
       ) : (
-        <FlatList
-          data={tasks}
+        <Animated.FlatList
+          data={filteredTasks}
           keyExtractor={(item) => item.id.toString()}
           // Without this, the first tap on Save/Cancel only closes the keyboard.
           keyboardShouldPersistTaps="handled"
+          itemLayoutAnimation={LinearTransition.duration(200)}
           contentContainerStyle={
-            tasks.length === 0 ? styles.emptyList : styles.list
+            filteredTasks.length === 0 ? styles.emptyList : styles.list
           }
           ListEmptyComponent={
             <View style={styles.emptyState}>
@@ -312,21 +404,23 @@ export default function HomeScreen() {
                   tintColor={colors.accent}
                 />
               </View>
-              <Text style={styles.emptyTitle}>All clear!</Text>
-              <Text style={styles.emptyText}>
-                Add a task above to get started.
-              </Text>
+              <Text style={styles.emptyTitle}>{emptyCopy.title}</Text>
+              <Text style={styles.emptyText}>{emptyCopy.text}</Text>
             </View>
           }
           renderItem={({ item }) => (
-            <View style={styles.taskCard}>
+            <Animated.View
+              entering={FadeIn.duration(200)}
+              exiting={FadeOut.duration(150)}
+              style={styles.taskCard}
+            >
               <Pressable
                 style={[
                   styles.checkbox,
                   item.is_completed && styles.checkboxCompleted,
                 ]}
                 onPress={() => toggleTask(item.id)}
-                hitSlop={10}
+                hitSlop={11}
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: item.is_completed }}
                 accessibilityLabel={`Toggle ${item.title}`}
@@ -374,6 +468,7 @@ export default function HomeScreen() {
                         setEditDescription("");
                       }}
                       disabled={isSaving}
+                      hitSlop={4}
                       accessibilityRole="button"
                     >
                       <Text style={styles.secondaryButtonText}>Cancel</Text>
@@ -386,6 +481,7 @@ export default function HomeScreen() {
                       ]}
                       onPress={saveEditedTask}
                       disabled={isSaving}
+                      hitSlop={4}
                       accessibilityRole="button"
                     >
                       <Text style={styles.primaryButtonText}>
@@ -416,24 +512,6 @@ export default function HomeScreen() {
                       {item.description}
                     </Text>
                   ) : null}
-
-                  <View
-                    style={[
-                      styles.badge,
-                      item.is_completed ? styles.badgeDone : styles.badgeActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.badgeText,
-                        item.is_completed
-                          ? styles.badgeTextDone
-                          : styles.badgeTextActive,
-                      ]}
-                    >
-                      {item.is_completed ? "COMPLETED" : "IN PROGRESS"}
-                    </Text>
-                  </View>
                 </Pressable>
               )}
 
@@ -443,7 +521,7 @@ export default function HomeScreen() {
                     onPress={() => startEditingTask(item)}
                     style={({ pressed }) => [
                       styles.iconButton,
-                      pressed && styles.pressed,
+                      pressed && styles.iconButtonPressed,
                     ]}
                     hitSlop={4}
                     accessibilityRole="button"
@@ -451,8 +529,8 @@ export default function HomeScreen() {
                   >
                     <SymbolView
                       name={{ ios: "pencil", android: "edit", web: "edit" }}
-                      size={18}
-                      tintColor={colors.accent}
+                      size={20}
+                      tintColor={colors.muted}
                     />
                   </Pressable>
 
@@ -460,8 +538,7 @@ export default function HomeScreen() {
                     onPress={() => handleDeleteTask(item.id)}
                     style={({ pressed }) => [
                       styles.iconButton,
-                      styles.iconButtonDanger,
-                      pressed && styles.pressed,
+                      pressed && styles.iconButtonPressed,
                     ]}
                     hitSlop={4}
                     accessibilityRole="button"
@@ -469,18 +546,18 @@ export default function HomeScreen() {
                   >
                     <SymbolView
                       name={{ ios: "trash", android: "delete", web: "delete" }}
-                      size={18}
+                      size={20}
                       tintColor={colors.danger}
                     />
                   </Pressable>
                 </View>
               )}
-            </View>
+            </Animated.View>
           )}
         />
       )}
 
-      <Text style={styles.footer}>SMALL STEPS. BIG PROGRESS.</Text>
+      <Text style={styles.footer}>Small steps. Big progress.</Text>
     </SafeAreaView>
   );
 }
@@ -495,13 +572,12 @@ function createStyles(colors: Record<ThemeColor, string>) {
       backgroundColor: colors.screen,
       paddingHorizontal: 20,
     },
-    header: { paddingTop: 24, paddingBottom: 20 },
-    eyebrow: {
-      color: colors.accent,
-      fontSize: 11,
-      fontWeight: "800",
-      letterSpacing: 1.5,
-      marginBottom: 8,
+    header: { paddingTop: 16, paddingBottom: 20 },
+    date: {
+      color: colors.accentStrong,
+      fontSize: 14,
+      fontWeight: "700",
+      marginBottom: 4,
     },
     heading: {
       color: colors.heading,
@@ -509,94 +585,116 @@ function createStyles(colors: Record<ThemeColor, string>) {
       fontWeight: "800",
       letterSpacing: -1,
     },
-    subtitle: { color: colors.muted, fontSize: 15, marginTop: 6 },
+    subtitle: { color: colors.muted, fontSize: 15, marginTop: 4 },
     summary: {
       backgroundColor: colors.hero,
-      borderRadius: 20,
+      borderRadius: 24,
       padding: 20,
       gap: 16,
-      marginBottom: 20,
+      marginBottom: 16,
     },
     summaryRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
     },
-    summaryLabel: {
-      color: colors.heroMuted,
-      fontSize: 10,
-      fontWeight: "800",
-      letterSpacing: 1.2,
-    },
+    summaryLabel: { color: colors.heroMuted, fontSize: 13, fontWeight: "600" },
     summaryNumber: {
       color: colors.onAccent,
-      fontSize: 19,
+      fontSize: 20,
       fontWeight: "700",
-      marginTop: 6,
+      marginTop: 4,
     },
     summaryPercent: {
       color: colors.onAccent,
-      fontSize: 30,
+      fontSize: 34,
       fontWeight: "800",
-      letterSpacing: -0.5,
+      letterSpacing: -1,
     },
     progressTrack: {
-      height: 8,
-      borderRadius: 4,
-      backgroundColor: "rgba(255, 255, 255, 0.18)",
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.heroTrack,
       overflow: "hidden",
     },
     progressFill: {
       height: "100%",
-      borderRadius: 4,
+      borderRadius: 5,
       backgroundColor: colors.heroMuted,
     },
-    inputRow: { flexDirection: "row", gap: 10, marginBottom: 24 },
-    input: {
-      flex: 1,
-      minWidth: 0,
+    composer: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
       backgroundColor: colors.card,
+      borderRadius: 18,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-      fontSize: 15,
+      paddingLeft: 16,
+      paddingRight: 6,
+      paddingVertical: 6,
+      marginBottom: 20,
+    },
+    composerInput: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 16,
       color: colors.heading,
+      paddingVertical: 10,
     },
     addButton: {
-      width: 52,
+      width: 44,
+      height: 44,
       borderRadius: 14,
       backgroundColor: colors.accent,
       alignItems: "center",
       justifyContent: "center",
     },
     pressed: { opacity: 0.7 },
-    sectionTitle: {
-      color: colors.muted,
-      fontSize: 11,
-      fontWeight: "800",
-      letterSpacing: 1.4,
-      marginBottom: 12,
+    segmented: {
+      flexDirection: "row",
+      gap: 4,
+      padding: 4,
+      borderRadius: 14,
+      backgroundColor: colors.surfaceMuted,
+      marginBottom: 16,
     },
+    segment: {
+      flex: 1,
+      minHeight: 40,
+      paddingHorizontal: 6,
+      borderRadius: 10,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    segmentActive: { backgroundColor: colors.accent },
+    segmentText: {
+      color: colors.muted,
+      fontSize: 14,
+      fontWeight: "700",
+      textAlign: "center",
+    },
+    segmentTextActive: { color: colors.onAccent },
+    segmentCount: { fontWeight: "500" },
     list: { gap: 10, paddingBottom: 16 },
     emptyList: { flexGrow: 1, justifyContent: "center", paddingBottom: 30 },
     taskCard: {
       flexDirection: "row",
       alignItems: "center",
+      gap: 14,
       backgroundColor: colors.card,
+      borderRadius: 18,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 16,
-      padding: 14,
-      gap: 12,
-      boxShadow: "0 1px 2px rgba(25, 29, 53, 0.06)",
+      paddingVertical: 12,
+      paddingLeft: 16,
+      paddingRight: 8,
     },
     checkbox: {
-      width: 24,
-      height: 24,
-      borderRadius: 8,
-      borderWidth: 1.5,
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      borderWidth: 2,
       borderColor: colors.faint,
       alignItems: "center",
       justifyContent: "center",
@@ -605,44 +703,31 @@ function createStyles(colors: Record<ThemeColor, string>) {
       backgroundColor: colors.accent,
       borderColor: colors.accent,
     },
-    taskContent: { flex: 1, gap: 4, minWidth: 0 },
-    taskTitle: { color: colors.heading, fontSize: 15, fontWeight: "600" },
+    taskContent: { flex: 1, gap: 2, minWidth: 0 },
+    taskTitle: { color: colors.heading, fontSize: 16, fontWeight: "600" },
     completedTitle: {
       color: colors.muted,
       textDecorationLine: "line-through",
     },
-    taskDescription: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-    badge: {
-      alignSelf: "flex-start",
-      borderRadius: 6,
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      marginTop: 4,
-    },
-    badgeActive: { backgroundColor: colors.accentSoft },
-    badgeDone: { backgroundColor: colors.successSoft },
-    badgeText: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8 },
-    badgeTextActive: { color: colors.accentStrong },
-    badgeTextDone: { color: colors.success },
+    taskDescription: { color: colors.muted, fontSize: 14, lineHeight: 20 },
     taskActions: { flexDirection: "row", gap: 8 },
     iconButton: {
-      width: 36,
-      height: 36,
-      borderRadius: 10,
-      backgroundColor: colors.accentSoft,
+      width: 40,
+      height: 40,
+      borderRadius: 12,
       alignItems: "center",
       justifyContent: "center",
     },
-    iconButtonDanger: { backgroundColor: colors.dangerSoft },
+    iconButtonPressed: { backgroundColor: colors.surfaceMuted },
     editForm: { flex: 1, gap: 8 },
     editInput: {
-      backgroundColor: colors.screen,
+      backgroundColor: colors.surfaceMuted,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 10,
+      borderRadius: 12,
       paddingHorizontal: 12,
       paddingVertical: 10,
-      fontSize: 14,
+      fontSize: 15,
       color: colors.heading,
     },
     descriptionInput: { minHeight: 72, textAlignVertical: "top" },
@@ -653,27 +738,55 @@ function createStyles(colors: Record<ThemeColor, string>) {
       marginTop: 4,
     },
     primaryButton: {
+      minHeight: 40,
+      paddingHorizontal: 18,
+      borderRadius: 999,
       backgroundColor: colors.accent,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 10,
+      alignItems: "center",
+      justifyContent: "center",
     },
     primaryButtonText: {
       color: colors.onAccent,
-      fontSize: 13,
+      fontSize: 14,
       fontWeight: "700",
     },
     secondaryButton: {
-      backgroundColor: colors.accentSoft,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 10,
+      minHeight: 40,
+      paddingHorizontal: 18,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceMuted,
+      alignItems: "center",
+      justifyContent: "center",
     },
     secondaryButtonText: {
-      color: colors.accentStrong,
-      fontSize: 13,
+      color: colors.heading,
+      fontSize: 14,
       fontWeight: "700",
     },
+    skeletonCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 14,
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: 16,
+    },
+    skeletonCircle: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: colors.surfaceMuted,
+    },
+    skeletonLines: { flex: 1, gap: 8 },
+    skeletonLine: {
+      height: 12,
+      borderRadius: 6,
+      backgroundColor: colors.surfaceMuted,
+    },
+    skeletonLineLong: { width: "70%" },
+    skeletonLineShort: { width: "45%" },
     emptyState: { alignItems: "center", padding: 30, gap: 8 },
     stateIcon: {
       width: 64,
@@ -685,8 +798,13 @@ function createStyles(colors: Record<ThemeColor, string>) {
       marginBottom: 8,
     },
     stateIconDanger: { backgroundColor: colors.dangerSoft },
-    emptyTitle: { color: colors.heading, fontSize: 19, fontWeight: "800" },
-    emptyText: { color: colors.muted, fontSize: 13, textAlign: "center" },
+    emptyTitle: {
+      color: colors.heading,
+      fontSize: 19,
+      fontWeight: "800",
+      textAlign: "center",
+    },
+    emptyText: { color: colors.muted, fontSize: 14, textAlign: "center" },
     centerState: {
       flex: 1,
       alignItems: "center",
@@ -696,10 +814,9 @@ function createStyles(colors: Record<ThemeColor, string>) {
     retryButton: { marginTop: 8 },
     footer: {
       textAlign: "center",
-      color: colors.faint,
-      fontSize: 9,
-      fontWeight: "800",
-      letterSpacing: 1.5,
+      color: colors.muted,
+      fontSize: 12,
+      fontWeight: "600",
       paddingVertical: 12,
     },
   });
