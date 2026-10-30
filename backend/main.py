@@ -90,13 +90,15 @@ def update_task(
             detail="Task not found",
         )
 
-    task.is_completed = task_data.is_completed
+    update_data = task_data.model_dump(exclude_unset=True)
+
+    for field, value in update_data.items():
+        setattr(task, field, value)
 
     db.commit()
     db.refresh(task)
 
     return task
-
 
 @app.delete(
     "/api/v1/tasks/{task_id}",

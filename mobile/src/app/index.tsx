@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Keyboard,
@@ -12,55 +13,174 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type Task = {
-  id: string;
-  title: string;
-  completed: boolean;
-};
-
-const initialTasks: Task[] = [
-  { id: "1", title: "Learn React Native", completed: true },
-  { id: "2", title: "Build Task Manager UI", completed: false },
-  { id: "3", title: "Connect to FastAPI", completed: false },
-];
+import {
+  createTask,
+  getTasks,
+  updateTask,
+  deleteTask,
+  updateTaskCompletion,
+  type Task,
+} from "@/services/tasks";
 
 export default function HomeScreen() {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
-  const completedCount = tasks.filter((task) => task.completed).length;
+  const loadTasks = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await getTasks();
+      setTasks(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load tasks.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  function addTask() {
+  useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
+
+  const completedCount = tasks.filter((task) => task.is_completed).length;
+
+  function showMessage(title: string, message: string) {
+    if (Platform.OS === "web") {
+      window.alert(`${title}\n${message}`);
+    } else {
+      Alert.alert(title, message);
+    }
+  }
+
+  async function addTask() {
     const title = newTask.trim();
 
     if (!title) {
-      if (Platform.OS === "web") {
-        window.alert("Please enter a task title.");
-      } else {
-        Alert.alert("Missing task", "Please enter a task title.");
-      }
+      showMessage("Missing task", "Please enter a task title.");
       return;
     }
 
-    setTasks((currentTasks) => [
-      { id: Date.now().toString(), title, completed: false },
-      ...currentTasks,
-    ]);
+    if (isCreating) {
+      return;
+    }
 
-    setNewTask("");
+    setIsCreating(true);
     Keyboard.dismiss();
+
+    try {
+      const createdTask = await createTask(title, "");
+
+      setTasks((currentTasks) => [createdTask, ...currentTasks]);
+      setNewTask("");
+      setError(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unable to create task.";
+
+      showMessage("Create task failed", message);
+    } finally {
+      setIsCreating(false);
+    }
   }
 
-  function toggleTask(id: string) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task,
-      ),
-    );
+  const toggleTask = async (taskId: number) => {
+    const currentTask = tasks.find((task) => task.id === taskId);
+
+    if (!currentTask) {
+      return;
+    }
+
+    try {
+      const updatedTask = await updateTaskCompletion(
+        taskId,
+        !currentTask.is_completed,
+      );
+
+      setTasks((currentTasks) =>
+        currentTasks.map((task) => (task.id === taskId ? updatedTask : task)),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Something went wrong.";
+
+      Alert.alert("Update failed", message);
+    }
+  };
+
+  function startEditingTask(task: Task) {
+    setEditingTaskId(task.id);
+    setEditTitle(task.title);
+    setEditDescription(task.description ?? "");
   }
 
-  function deleteTask(id: string) {
-    setTasks((currentTasks) => currentTasks.filter((task) => task.id !== id));
+  async function saveEditedTask() {
+    const title = editTitle.trim();
+
+    if (!title) {
+      showMessage("Missing task title", "Please enter a task title.");
+      return;
+    }
+
+    if (editingTaskId === null || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    Keyboard.dismiss();
+
+    try {
+      const updatedTask = await updateTask(
+        editingTaskId,
+        title,
+        editDescription,
+      );
+
+      setTasks((currentTasks) =>
+        currentTasks.map((task) =>
+          task.id === editingTaskId ? updatedTask : task,
+        ),
+      );
+
+      setEditingTaskId(null);
+      setEditTitle("");
+      setEditDescription("");
+      setError(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unable to update task.";
+
+      showMessage("Edit task failed", message);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleDeleteTask(taskId: number) {
+    const task = tasks.find((item) => item.id === taskId);
+
+    if (!task) {
+      return;
+    }
+
+    try {
+      await deleteTask(taskId);
+
+      setTasks((currentTasks) =>
+        currentTasks.filter((item) => item.id !== taskId),
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unable to delete task.";
+
+      showMessage("Delete failed", message);
+    }
   }
 
   return (
@@ -94,77 +214,162 @@ export default function HomeScreen() {
           accessibilityLabel="New task title"
         />
         <Pressable
-          style={styles.addButton}
+          style={[styles.addButton, isCreating && { opacity: 0.6 }]}
           onPress={addTask}
+          disabled={isCreating}
           accessibilityRole="button"
           accessibilityLabel="Add task"
         >
-          <Text style={styles.addButtonText}>+</Text>
+          {isCreating ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.addButtonText}>+</Text>
+          )}
         </Pressable>
       </View>
 
       <Text style={styles.sectionTitle}>TASK LIST</Text>
 
-      <FlatList
-        data={tasks}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={
-          tasks.length === 0 ? styles.emptyList : styles.list
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>✓</Text>
-            <Text style={styles.emptyTitle}>All clear!</Text>
-            <Text style={styles.emptyText}>
-              Add a task above to get started.
-            </Text>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.taskCard}>
-            <Pressable
-              style={[
-                styles.checkbox,
-                item.completed && styles.checkboxCompleted,
-              ]}
-              onPress={() => toggleTask(item.id)}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: item.completed }}
-              accessibilityLabel={`Mark ${item.title} ${
-                item.completed ? "incomplete" : "complete"
-              }`}
-            >
-              {item.completed && <Text style={styles.checkmark}>✓</Text>}
-            </Pressable>
-
-            <Pressable
-              style={styles.taskContent}
-              onPress={() => toggleTask(item.id)}
-            >
-              <Text
+      {loading ? (
+        <View style={styles.centerState}>
+          <ActivityIndicator size="large" color="#6268D9" />
+          <Text style={styles.emptyText}>Loading tasks...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.centerState}>
+          <Text style={styles.emptyTitle}>Could not load tasks</Text>
+          <Text style={styles.emptyText}>{error}</Text>
+          <Pressable style={styles.retryButton} onPress={loadTasks}>
+            <Text style={styles.retryText}>Try again</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={tasks}
+          keyExtractor={(item) => item.id.toString()}
+          // Without this, the first tap on Save/Cancel only closes the keyboard.
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={
+            tasks.length === 0 ? styles.emptyList : styles.list
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>✓</Text>
+              <Text style={styles.emptyTitle}>All clear!</Text>
+              <Text style={styles.emptyText}>
+                Add a task above to get started.
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => (
+            <View style={styles.taskCard}>
+              <Pressable
                 style={[
-                  styles.taskTitle,
-                  item.completed && styles.completedTitle,
+                  styles.checkbox,
+                  item.is_completed && styles.checkboxCompleted,
                 ]}
+                onPress={() => toggleTask(item.id)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: item.is_completed }}
+                accessibilityLabel={`Toggle ${item.title}`}
               >
-                {item.title}
-              </Text>
-              <Text style={styles.taskStatus}>
-                {item.completed ? "COMPLETED" : "IN PROGRESS"}
-              </Text>
-            </Pressable>
+                {item.is_completed && <Text style={styles.checkmark}>✓</Text>}
+              </Pressable>
 
-            <Pressable
-              onPress={() => deleteTask(item.id)}
-              style={styles.deleteButton}
-              accessibilityRole="button"
-              accessibilityLabel={`Delete ${item.title}`}
-            >
-              <Text style={styles.deleteText}>×</Text>
-            </Pressable>
-          </View>
-        )}
-      />
+              {editingTaskId === item.id ? (
+                <View style={styles.editForm}>
+                  <TextInput
+                    style={styles.editInput}
+                    value={editTitle}
+                    onChangeText={setEditTitle}
+                    placeholder="Task title"
+                    maxLength={200}
+                  />
+
+                  <TextInput
+                    style={[styles.editInput, styles.descriptionInput]}
+                    value={editDescription}
+                    onChangeText={setEditDescription}
+                    placeholder="Description (optional)"
+                    multiline
+                  />
+
+                  <View style={styles.editActions}>
+                    <Pressable
+                      style={styles.saveButton}
+                      onPress={saveEditedTask}
+                      disabled={isSaving}
+                    >
+                      <Text style={styles.saveButtonText}>
+                        {isSaving ? "Saving..." : "Save"}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.cancelButton}
+                      onPress={() => {
+                        setEditingTaskId(null);
+                        setEditTitle("");
+                        setEditDescription("");
+                      }}
+                      disabled={isSaving}
+                    >
+                      <Text style={styles.cancelButtonText}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Pressable
+                  style={styles.taskContent}
+                  onPress={() => toggleTask(item.id)}
+                >
+                  <Text
+                    style={[
+                      styles.taskTitle,
+                      item.is_completed && styles.completedTitle,
+                    ]}
+                  >
+                    {item.title}
+                  </Text>
+
+                  {item.description ? (
+                    <Text style={styles.taskDescription}>
+                      {item.description}
+                    </Text>
+                  ) : null}
+
+                  <Text style={styles.taskStatus}>
+                    {item.is_completed ? "COMPLETED" : "IN PROGRESS"}
+                  </Text>
+                </Pressable>
+              )}
+
+              {editingTaskId !== item.id && (
+                <>
+                  <Pressable
+                    onPress={() => startEditingTask(item)}
+                    style={styles.editButton}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Edit ${item.title}`}
+                  >
+                    <Text style={styles.editText}>Edit</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => handleDeleteTask(item.id)}
+                    style={styles.deleteButton}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${item.title}`}
+                  >
+                    <Text style={styles.deleteText}>×</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+          )}
+        />
+      )}
+
       <Text style={styles.footer}>SMALL STEPS. BIG PROGRESS.</Text>
     </SafeAreaView>
   );
@@ -179,10 +384,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F6F7FB",
     paddingHorizontal: 22,
   },
-  header: {
-    paddingTop: 28,
-    paddingBottom: 24,
-  },
+  header: { paddingTop: 28, paddingBottom: 24 },
   eyebrow: {
     color: "#6268D9",
     fontSize: 11,
@@ -196,11 +398,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: -1,
   },
-  subtitle: {
-    color: "#74798B",
-    fontSize: 15,
-    marginTop: 7,
-  },
+  subtitle: { color: "#74798B", fontSize: 15, marginTop: 7 },
   summary: {
     backgroundColor: "#292E63",
     borderRadius: 18,
@@ -258,11 +456,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  addButtonText: {
-    color: "#FFFFFF",
-    fontSize: 28,
-    fontWeight: "400",
-  },
+  addButtonText: { color: "#FFFFFF", fontSize: 28, fontWeight: "400" },
   sectionTitle: {
     color: "#777D90",
     fontSize: 11,
@@ -270,15 +464,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     marginBottom: 12,
   },
-  list: {
-    gap: 11,
-    paddingBottom: 18,
-  },
-  emptyList: {
-    flexGrow: 1,
-    justifyContent: "center",
-    paddingBottom: 30,
-  },
+  list: { gap: 11, paddingBottom: 18 },
+  emptyList: { flexGrow: 1, justifyContent: "center", paddingBottom: 30 },
   taskCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -298,28 +485,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxCompleted: {
-    backgroundColor: "#6268D9",
-    borderColor: "#6268D9",
-  },
-  checkmark: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "800",
-  },
+  checkboxCompleted: { backgroundColor: "#6268D9", borderColor: "#6268D9" },
+  checkmark: { color: "#FFFFFF", fontSize: 15, fontWeight: "800" },
   taskContent: {
     flex: 1,
-    gap: 6,
+    flexDirection: "column",
+    gap: 4,
+    minWidth: 0,
   },
-  taskTitle: {
-    color: "#292D42",
-    fontSize: 14,
-    fontWeight: "600",
+  taskTitle: { color: "#292D42", fontSize: 14, fontWeight: "600" },
+  taskDescription: {
+    color: "#858A9A",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 2,
   },
-  completedTitle: {
-    color: "#969AAA",
-    textDecorationLine: "line-through",
-  },
+  completedTitle: { color: "#969AAA", textDecorationLine: "line-through" },
   taskStatus: {
     color: "#8B90A2",
     fontSize: 9,
@@ -332,30 +513,85 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  deleteText: {
-    color: "#A0A4B3",
-    fontSize: 25,
+  deleteText: { color: "#A0A4B3", fontSize: 25 },
+  editButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: "#EEF0FF",
   },
-  emptyState: {
-    alignItems: "center",
-    padding: 30,
-  },
-  emptyIcon: {
+  editText: {
     color: "#6268D9",
-    fontSize: 34,
-    marginBottom: 12,
+    fontSize: 12,
+    fontWeight: "700",
   },
-  emptyTitle: {
-    color: "#292D42",
-    fontSize: 19,
-    fontWeight: "800",
+  editForm: {
+    flex: 1,
+    gap: 8,
   },
+  editInput: {
+    backgroundColor: "#F6F7FB",
+    borderWidth: 1,
+    borderColor: "#E4E6EF",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: "#191D35",
+  },
+  descriptionInput: {
+    minHeight: 65,
+    textAlignVertical: "top",
+  },
+  editActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4,
+  },
+  saveButton: {
+    backgroundColor: "#6268D9",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  saveButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  cancelButton: {
+    backgroundColor: "#EEF0F4",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  cancelButtonText: {
+    color: "#626B7A",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  emptyState: { alignItems: "center", padding: 30 },
+  emptyIcon: { color: "#6268D9", fontSize: 34, marginBottom: 12 },
+  emptyTitle: { color: "#292D42", fontSize: 19, fontWeight: "800" },
   emptyText: {
     color: "#858A9A",
     fontSize: 13,
     textAlign: "center",
     marginTop: 8,
   },
+  centerState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  retryButton: {
+    backgroundColor: "#6268D9",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  retryText: { color: "#FFFFFF", fontWeight: "700" },
   footer: {
     textAlign: "center",
     color: "#A0A4B3",

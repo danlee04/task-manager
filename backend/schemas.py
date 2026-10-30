@@ -17,5 +17,8 @@ class TaskResponse(BaseModel):
     is_completed: bool
     created_at: datetime
 
+
 class TaskUpdate(BaseModel):
-    is_completed: bool
+    title: str | None = None
+    description: str | None = None
+    is_completed: bool | None = None
